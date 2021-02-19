@@ -65,16 +65,31 @@ price_binomial_lattice<-function(lattice, is_european,payoff_function){
 
 #this print function leaves a lot to be desired but eh
 print_binomial_lattice<-function(lattice,parameter){
-  for(ii in 1:length(lattice)){
+  lines<-list()
+  longest<-0
+  for(ii in length(lattice):1){#go through the list backwards so get the longest line first
+      str<-""
+      
     for(jj in 1:length(lattice[[ii]])){
-      cat(format(lattice[[ii]][[jj]][parameter],digits=2,nsmall=2))
-      cat(" ")
+      num<-format(lattice[[ii]][[jj]][parameter],digits=2,nsmall=2)
+      padding<-max(longest/(length(lattice[[ii]])+1)-nchar(num),0)
+      str<-paste(str,paste(strrep(" ",padding)))#padding to center
+      str<-paste(str,num)
     }
+    
+    if(ii==length(lattice)){
+      longest<-nchar(str)
+    }
+    lines[[ii]]<-str
+  }
+  
+  for(ii in 1:length(lines)){
+    cat(lines[[ii]])
     cat("\n")
   }
 }
 
-a<-binomial_lattice(3,1,TRUE, 100, 0.05,0.2)
+a<-binomial_lattice(3,1,TRUE, 100, 0.05,0.2,1)
 print_binomial_lattice(a,"price")
 
 #monte-carlo implementations - does not compute the entire lattice but rather some simulated paths
