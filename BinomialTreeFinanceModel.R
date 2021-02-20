@@ -17,7 +17,7 @@ binomial_lattice<-function(T_,h_, is_rc, S_0, r_, sigma,method){
     u_<-exp(sigma*sqrt(h_))
     d_<-1/u_
   }else{
-    delta<-exp(r_*h_)*sqrt(e^(sigma^2*h_)-1)
+    delta<-exp(r_*h_)*sqrt(exp(sigma^2*h_)-1)
     u_<-exp(r_*h_)+delta
     d_<-exp(r_*h_)-delta
   }
@@ -215,7 +215,7 @@ b<-price_binomial_lattice(b,TRUE,asian_put_payoff,list(K=200,numtoaverage=3))
 print_binomial_lattice(b[[1]],"optionprice")
 
 
-c<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
+c<-binomial_lattice(1,1/10,FALSE, 200, 0.09,0.3,1)
 print_binomial_lattice(c[[1]],"price")
 c<-price_binomial_lattice(c,FALSE,asian_put_payoff,list(K=200,numtoaverage=3))
 print_binomial_lattice(c[[1]],"optionprice")
@@ -224,6 +224,38 @@ print_binomial_lattice(c[[1]],"optionprice")
 #a non-recombining tree has O(2^n) nodes and a recombining tree has O(n^2) nodes. It is still useful
 #for recombining trees and path-independent options but less so. 
 
+binomial_paths<-function(T_,h_, S_0, r_, sigma,method,N_){
+  model_parameters<-list()
+  
+  n_levels<-T_/h_#number of levels in the lattice
+  if(method==1){
+    u_<-exp(sigma*sqrt(h_))
+    d_<-1/u_
+  }else{
+    delta<-exp(r_*h_)*sqrt(exp^(sigma^2*h_)-1)
+    u_<-exp(r_*h_)+delta
+    d_<-exp(r_*h_)-delta
+  }
+  qu<-(exp(r_*h_)-d_)/(u_-d_)#risk neutral measure in binomial model
+  qd<-1-qu
+    
+  paths<-vector("list",length = N_)
+  for(nn in  1:N_)
+    path<-vector("numeric",n_levels+1)
+    path[[1]]<-S_0
+    randoms<-runif(n_levels)
+    for(ii in 1:n_levels){
+      time<-ii+1
+      if(randoms[ii]>=qu){#obviously is true with probability qu
+        path[[time]]<-path[[time-1]]*u_
+      }else{
+        path[[time]]<-path[[time-1]]*d_
+      }
+    }
+    model_parameters<-list(T_=T_,h_=h_,r_=r_,sigma=sigma, method=method,u_=u_,d_=d_,qu=qu,qd=qd)
+  return(list(paths,model_parameters))    
+}
 
+a1<-binomial_paths(3,1,100,0.05,0.2,1,100)  
 
 
