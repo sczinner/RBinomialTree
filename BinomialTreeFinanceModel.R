@@ -204,10 +204,7 @@ print_binomial_lattice<-function(lattice,parameter){
   }
 }
 
-a<-binomial_lattice(3,1,TRUE, 100, 0.05,0.2,1)
-print_binomial_lattice(a[[1]],"price")
-a<-price_binomial_lattice(a,TRUE,call_payoff,list(K=100))
-print_binomial_lattice(a[[1]],"optionprice")
+
 
 b<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
 print_binomial_lattice(b[[1]],"price")
@@ -215,7 +212,7 @@ b<-price_binomial_lattice(b,TRUE,asian_put_payoff,list(K=200,numtoaverage=3))
 print_binomial_lattice(b[[1]],"optionprice")
 
 
-c<-binomial_lattice(1,1/10,FALSE, 200, 0.09,0.3,1)
+c<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
 print_binomial_lattice(c[[1]],"price")
 c<-price_binomial_lattice(c,FALSE,asian_put_payoff,list(K=200,numtoaverage=3))
 print_binomial_lattice(c[[1]],"optionprice")
@@ -232,30 +229,88 @@ binomial_paths<-function(T_,h_, S_0, r_, sigma,method,N_){
     u_<-exp(sigma*sqrt(h_))
     d_<-1/u_
   }else{
-    delta<-exp(r_*h_)*sqrt(exp^(sigma^2*h_)-1)
+    delta<-exp(r_*h_)*sqrt(exp(sigma^2*h_)-1)
     u_<-exp(r_*h_)+delta
     d_<-exp(r_*h_)-delta
   }
   qu<-(exp(r_*h_)-d_)/(u_-d_)#risk neutral measure in binomial model
   qd<-1-qu
     
-  paths<-vector("list",length = N_)
-  for(nn in  1:N_)
-    path<-vector("numeric",n_levels+1)
-    path[[1]]<-S_0
-    randoms<-runif(n_levels)
-    for(ii in 1:n_levels){
-      time<-ii+1
-      if(randoms[ii]>=qu){#obviously is true with probability qu
-        path[[time]]<-path[[time-1]]*u_
-      }else{
-        path[[time]]<-path[[time-1]]*d_
-      }
-    }
-    model_parameters<-list(T_=T_,h_=h_,r_=r_,sigma=sigma, method=method,u_=u_,d_=d_,qu=qu,qd=qd)
+  paths<-list()
+  paths$prices<-matrix(data = S_0, nrow=n_levels+1, ncol=N_)
+  movements<-sample(x = c(u_,d_),size = N_*n_levels,replace=TRUE,prob=c(qu,qd))
+  movements<-matrix(data = movements,nrow=n_levels,ncol=N_)
+  for(ii in 1:n_levels){
+    time<-ii+1
+    paths$prices[time,]=paths$prices[time-1,]*movements[time-1,]
+  }
+  model_parameters<-list(T_=T_,h_=h_,r_=r_,sigma=sigma, method=method,u_=u_,d_=d_,qu=qu,qd=qd)
   return(list(paths,model_parameters))    
 }
 
-a1<-binomial_paths(3,1,100,0.05,0.2,1,100)  
+call_payoff_mc<-function(paths,param){
+  K<-param[[1]]
+  paths$payoffs<-apply(paths$prices,1:2,function(x)max(x-K,0))
+  return(paths)
+}
 
 
+
+#american options and early exercise https://people.math.ethz.ch/~hjfurrer/teaching/LongstaffSchwartzAmericanOptionsLeastSquareMonteCarlo.pdf
+#Longstaff–Schwartz (LS) algorithm as described in
+#Valuing American Options by Simulation: A Simple Least-Squares Approach  (2001)
+price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
+  model_parameters<-paths[[2]]
+  paths<-paths[[1]]
+  
+  is_rc<-model_parameters$is_rc
+  r_<-model_parameters$r_
+  h_<-model_parameters$h_
+  u_<-model_parameters$u_
+  d_<-model_parameters$d_
+  qu<-model_parameters$qu
+  qd<-model_parameters$qd
+  
+  if(is_european){
+    paths<-payoff_function(paths,param)
+    paths$optionprices<-paths$price#everything in here should be reset but just initializing to matrix
+    for(ii in nrow(paths$prices):1){#backwards for recursive pricing
+      if(ii==nrow(paths$prices)){
+        paths$optionprices[ii,]<-paths$payoffs[ii,]
+      }else{
+        paths$optionprices[ii,]<-exp(-r_*h_)*paths$optionprices[ii+1,]
+      }
+    }
+  }else{
+    paths<-payoff_function(paths,param)
+    paths$optionprices<-paths$price#everything in here should be reset but just initializing to matrix
+    for(ii in nrow(paths$prices):1){#backwards for recursive pricing
+      if(ii==nrow(paths$prices)){
+        paths$optionprices[ii,]<-paths$payoffs[ii,]
+      }else{
+        exercise_values<-paths$payoffs[ii,]
+        discounted_cashflows<-exp(-r_*h_)*paths$optionprices[ii+1,]
+        #following the LS algorithm paper:
+        itmindices<-paths$payoffs[ii,]>0
+        X<-paths$prices[ii,][itmindices]
+        Y<-discounted_cashflows[itmindices]
+        if(length(Y)>0){
+          LSlm<-lm(Y~1+X+I(X^2))#the paper says to use more complicated basis functions
+          #but I will implement that later
+          paths$optionprices[ii,][itmindices]<-pmax(exercise_values[itmindices],LSlm$fitted.values)
+        }
+        paths$optionprices[ii,][!itmindices]<-discounted_cashflows[!itmindices]
+      }
+    }
+  }
+  return(list(paths,model_parameters))
+}
+a<-binomial_lattice(1/4,1/100,TRUE, 100, 0.05,0.2,1)
+print_binomial_lattice(a[[1]],"price")
+a<-price_binomial_lattice(a,TRUE,call_payoff,list(K=100))
+print_binomial_lattice(a[[1]],"optionprice")
+
+a1<-binomial_paths(1/4,1/100,100,0.05,0.2,1,5000)
+a1<-price_binomial_paths(a1,TRUE,call_payoff_mc,list(K=100))
+mean(a1[[1]]$optionprices[1,])
+a[[1]][[1]][[1]]$optionprice
