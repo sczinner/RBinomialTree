@@ -206,16 +206,7 @@ print_binomial_lattice<-function(lattice,parameter){
 
 
 
-b<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
-print_binomial_lattice(b[[1]],"price")
-b<-price_binomial_lattice(b,TRUE,asian_put_payoff,list(K=200,numtoaverage=3))
-print_binomial_lattice(b[[1]],"optionprice")
 
-
-c<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
-print_binomial_lattice(c[[1]],"price")
-c<-price_binomial_lattice(c,FALSE,asian_put_payoff,list(K=200,numtoaverage=3))
-print_binomial_lattice(c[[1]],"optionprice")
 #monte-carlo implementations - does not compute the entire lattice but rather some simulated paths
 #this is useful for path-dependent options due to otherwise exponential lattice size, for n periods
 #a non-recombining tree has O(2^n) nodes and a recombining tree has O(n^2) nodes. It is still useful
@@ -254,11 +245,50 @@ call_payoff_mc<-function(paths,param){
   return(paths)
 }
 
+asian_call_payoff_mc<-function(paths,param){
+  K<-param[[1]]
+  numtoaverage<-min(param[[2]],nrow(paths$prices))
+  
+  indexaverage<-1:nrow(paths$prices)#1,2,3,4,5,...
+  indexaverage<-pmin(indexaverage,numtoaverage)#i.e if average is 3 then you get 1,2,3,3,3,3,...
+  
+  averageprice<-matrix(data=0,nrow=nrow(paths$prices),ncol=ncol(paths$prices))
+  for(ii in  1:numtoaverage){
+    prices_shifted<-rbind(matrix(0,nrow=ii-1,ncol=ncol(paths$prices)),paths$prices[1:(nrow(paths$prices)-(ii-1)),])#pad with zeros at top and remove the bottom
+    averageprice=averageprice+prices_shifted/indexaverage
+  }
+  
+  paths$payoffs<-apply(averageprice,1:2,function(x)max(x-K,0))
+  
+  return(paths)
+}
+
+asian_put_payoff_mc<-function(paths,param){
+  K<-param[[1]]
+  numtoaverage<-min(param[[2]],nrow(paths$prices))
+  
+  indexaverage<-1:nrow(paths$prices)#1,2,3,4,5,...
+  indexaverage<-pmin(indexaverage,numtoaverage)#i.e if average is 3 then you get 1,2,3,3,3,3,...
+  #indexaverage<-matrix(data=rep(indexaverage,ncol(paths$prices)), nrow=nrow(paths$prices),ncol=ncol(paths$prices))
+  
+  averageprice<-matrix(data=0,nrow=nrow(paths$prices),ncol=ncol(paths$prices))
+  for(ii in  1:numtoaverage){
+    prices_shifted<-rbind(matrix(0,nrow=ii-1,ncol=ncol(paths$prices)),paths$prices[1:(nrow(paths$prices)-(ii-1)),])#pad with zeros at top and remove the bottom
+    averageprice=averageprice+prices_shifted/indexaverage
+  }
+  
+  paths$payoffs<-apply(averageprice,1:2,function(x)max(K-x,0))
+  
+  return(paths)
+}
+
 
 
 #american options and early exercise https://people.math.ethz.ch/~hjfurrer/teaching/LongstaffSchwartzAmericanOptionsLeastSquareMonteCarlo.pdf
 #Longstaff–Schwartz (LS) algorithm as described in
 #Valuing American Options by Simulation: A Simple Least-Squares Approach  (2001)
+#note that although im generating binomial tree paths, this pricing function
+#prices any path actually
 price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
   model_parameters<-paths[[2]]
   paths<-paths[[1]]
@@ -266,14 +296,10 @@ price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
   is_rc<-model_parameters$is_rc
   r_<-model_parameters$r_
   h_<-model_parameters$h_
-  u_<-model_parameters$u_
-  d_<-model_parameters$d_
-  qu<-model_parameters$qu
-  qd<-model_parameters$qd
-  
+
   if(is_european){
     paths<-payoff_function(paths,param)
-    paths$optionprices<-paths$price#everything in here should be reset but just initializing to matrix
+    paths$optionprices<-paths$prices#everything in here should be reset but just initializing to matrix
     for(ii in nrow(paths$prices):1){#backwards for recursive pricing
       if(ii==nrow(paths$prices)){
         paths$optionprices[ii,]<-paths$payoffs[ii,]
@@ -283,7 +309,7 @@ price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
     }
   }else{
     paths<-payoff_function(paths,param)
-    paths$optionprices<-paths$price#everything in here should be reset but just initializing to matrix
+    paths$optionprices<-paths$prices#everything in here should be reset but just initializing to matrix
     for(ii in nrow(paths$prices):1){#backwards for recursive pricing
       if(ii==nrow(paths$prices)){
         paths$optionprices[ii,]<-paths$payoffs[ii,]
@@ -295,8 +321,15 @@ price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
         X<-paths$prices[ii,][itmindices]
         Y<-discounted_cashflows[itmindices]
         if(length(Y)>0){
-          LSlm<-lm(Y~1+X+I(X^2))#the paper says to use more complicated basis functions
+         
+          #LSlm<-lm(Y~1+X+I(X^2))#the paper says to use more complicated basis functions
           #but I will implement that later
+          
+          #paper:.~One possible choice of basis functions is the set of 
+          #(weighted) Laguerre polynomials
+          
+          LSlm<-lm(Y~1+I(exp(-X/2))+I(exp(-X/2)*(1-X))+I(exp(-X/2)*(1-2*X+X^2/2)))
+          
           paths$optionprices[ii,][itmindices]<-pmax(exercise_values[itmindices],LSlm$fitted.values)
         }
         paths$optionprices[ii,][!itmindices]<-discounted_cashflows[!itmindices]
@@ -305,12 +338,30 @@ price_binomial_paths<-function(paths, is_european,payoff_function,param=NULL){
   }
   return(list(paths,model_parameters))
 }
-a<-binomial_lattice(1/4,1/100,TRUE, 100, 0.05,0.2,1)
-print_binomial_lattice(a[[1]],"price")
+a<-binomial_lattice(1/4,1/12,TRUE, 100, 0.05,0.2,1)
+#print_binomial_lattice(a[[1]],"price")
 a<-price_binomial_lattice(a,TRUE,call_payoff,list(K=100))
-print_binomial_lattice(a[[1]],"optionprice")
+#print_binomial_lattice(a[[1]],"optionprice")
 
-a1<-binomial_paths(1/4,1/100,100,0.05,0.2,1,5000)
+a1<-binomial_paths(1/4,1/12,100,0.05,0.2,1,5000)
 a1<-price_binomial_paths(a1,TRUE,call_payoff_mc,list(K=100))
-mean(a1[[1]]$optionprices[1,])
-a[[1]][[1]][[1]]$optionprice
+paste("mc: ", mean(a1[[1]]$optionprices[1,]),", bintree: ",a[[1]][[1]][[1]]$optionprice)
+
+b<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
+#print_binomial_lattice(b[[1]],"price")
+b<-price_binomial_lattice(b,TRUE,asian_put_payoff,list(K=200,numtoaverage=3))
+#print_binomial_lattice(b[[1]],"optionprice")
+
+b1<-binomial_paths(1/4,1/12,200,0.09,0.3,1,5000)
+b1<-price_binomial_paths(b1,TRUE,asian_put_payoff_mc,list(K=200,numtoaverage=3))
+paste("mc: ", mean(b1[[1]]$optionprices[1,]),", bintree: ",b[[1]][[1]][[1]]$optionprice)
+
+
+c<-binomial_lattice(1/4,1/12,FALSE, 200, 0.09,0.3,1)
+#print_binomial_lattice(c[[1]],"price")
+c<-price_binomial_lattice(c,FALSE,asian_put_payoff,list(K=200,numtoaverage=3))
+#print_binomial_lattice(c[[1]],"optionprice")
+
+c1<-binomial_paths(1/4,1/12,200,0.09,0.3,1,5000)
+c1<-price_binomial_paths(b1,FALSE,asian_put_payoff_mc,list(K=200,numtoaverage=3))
+paste("mc: ", mean(c1[[1]]$optionprices[1,]),", bintree: ",c[[1]][[1]][[1]]$optionprice)
